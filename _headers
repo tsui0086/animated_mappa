@@ -4,8 +4,14 @@
   Permissions-Policy: camera=(), microphone=(), geolocation=()
   Cache-Control: public, max-age=3600
 
+/index.html
+  Cache-Control: no-cache, must-revalidate
+
+/login.html
+  Cache-Control: no-cache, must-revalidate
+
 /app.js
-  Cache-Control: public, max-age=3600
+  Cache-Control: no-cache, must-revalidate
 
 /styles.css
-  Cache-Control: public, max-age=3600
+  Cache-Control: no-cache, must-revalidate

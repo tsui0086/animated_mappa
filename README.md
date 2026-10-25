@@ -40,6 +40,8 @@ python3 -m http.server 4173
 - Build command 可以留空，或者使用 `exit 0`；
 - 不设置自定义 Deploy command。
 
+本项目不使用 `_redirects` 的全站 SPA fallback：`login.html` 必须作为真实静态页面直接返回，否则会被重写到 `index.html` 并触发登录重定向循环。
+
 当前项目没有构建步骤。Git 集成部署不需要 `CLOUDFLARE_API_TOKEN`、D1、R2 或 KV；访问保护只需要 Pages Secrets。
 
 在 Cloudflare Pages 项目的 **Settings → Variables and Secrets** 中配置生产环境 Secret：

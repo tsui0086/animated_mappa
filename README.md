@@ -13,7 +13,7 @@
 - 叠加层：场景标题、路线副标题、品牌标记；
 - 摄像机：跟随/固定、跟随平移、缩放偏置、缓动选择；
 - 时间线：播放、暂停、拖动、速度切换；
-- 导出：项目 JSON、本地剪贴板 JSON、浏览器 WebM 预览导出；
+- 导出：项目 JSON、本地剪贴板 JSON、浏览器 WebM 预览导出、浏览器本地 MP4 转码；
 - 响应式布局：桌面、平板和移动端；
 - Cloudflare Pages / Workers 配置文件。
 
@@ -30,13 +30,28 @@ python3 -m http.server 4173
 
 ## Cloudflare Pages
 
-项目根目录就是本目录，构建命令为空，输出目录为 `.`。使用 Wrangler：
+### GitHub 集成（推荐）
+
+如果 Cloudflare Pages 已连接 GitHub/GitLab，不要把 `npx wrangler pages deploy` 设置为 Pages 的构建或部署命令。Git 集成会在提交后自动完成部署；在 Pages 控制台使用以下设置即可：
+
+- 如果仓库根目录就是本项目：Root directory 留空，Build output directory 填 `.`；
+- 如果本项目位于仓库的 `maps/` 子目录：Root directory 填 `maps`，Build output directory 填 `.`；
+- Build command 可以留空，或者使用 `exit 0`；
+- 不设置自定义 Deploy command。
+
+当前项目没有构建步骤。Git 集成部署不需要 `CLOUDFLARE_API_TOKEN`、D1、R2 或 KV。
+
+### Wrangler Direct Upload（可选）
+
+只有在不使用 Git 自动部署，或从本地/CI 直接上传时，才使用 Wrangler：
 
 ```bash
 npx wrangler pages deploy /home/seingeur/lavoro/elite830/maps --project-name route-atlas-pages
 ```
 
 `wrangler.toml` 已包含 `pages_build_output_dir = "."`。
+
+Direct Upload 需要一个具有 Account → Cloudflare Pages → Edit 权限的 API Token，并通过 `CLOUDFLARE_API_TOKEN` 提供给 Wrangler。不要把 Token 写入仓库或提交到 GitHub。
 
 ## Cloudflare Workers Static Assets
 
@@ -52,6 +67,8 @@ Worker 仅负责把静态资源交给 Cloudflare Assets；应用本身不需要 
 - GPX 只在浏览器本地解析，不上传服务器。
 - 路线项目只写入浏览器 `localStorage`，JSON 由用户主动下载。
 - 外部地图瓦片属于第三方服务，当前版本未内置离线底图。
+- MP4 导出通过浏览器内的 FFmpeg WebAssembly 完成，首次使用会下载约 31 MB 的编码器；编码速度取决于设备性能，导出期间请保持页面打开。
+- 导出画面会尝试预加载路线范围内的地图瓦片；如果瓦片服务响应慢，仍会使用已加载的瓦片和矢量路线继续生成视频。
 
 ## 参考与设计取舍
 

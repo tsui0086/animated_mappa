@@ -146,6 +146,7 @@ input[type="range"] { width: 100%; accent-color: var(--color-accent); }
 .live-pill { display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border-radius: 99px; border: 1px solid rgba(16, 22, 20, 0.28); background: rgba(246, 243, 228, 0.87); color: #2f392f; font: 700 11px/1 var(--font-mono); box-shadow: 0 4px 13px rgba(0,0,0,.12); }
 .live-pill i { width: 7px; height: 7px; border-radius: 50%; background: #e85a3c; box-shadow: 0 0 0 4px rgba(232, 90, 60, .17); }
 .overlay-scene-name { color: #27302b; background: rgba(246, 243, 228, .87); border: 1px solid rgba(16, 22, 20, 0.28); padding: 7px 10px; border-radius: 7px; font-weight: 700; box-shadow: 0 4px 13px rgba(0,0,0,.12); }
+.overlay-brand { color: #f6f3e4; background: rgba(18, 24, 26, .78); border: 1px solid rgba(246, 243, 228, .28); padding: 7px 10px; border-radius: 7px; font: 700 10px/1 var(--font-mono); letter-spacing: .12em; box-shadow: 0 4px 13px rgba(0,0,0,.18); }
 .map-tools { position: absolute; z-index: 510; top: 64px; left: 20px; display: flex; gap: 4px; padding: 4px; border: 1px solid rgba(14, 18, 20, .3); border-radius: 9px; background: rgba(23, 28, 31, .93); box-shadow: var(--shadow-panel); }
 .tool-button { background: transparent; border-radius: 6px; padding: 8px 10px; color: #aeb7be; font-size: 12px; white-space: nowrap; }
 .tool-button:hover { color: #fff; background: rgba(255,255,255,.08); }
@@ -157,8 +158,15 @@ input[type="range"] { width: 100%; accent-color: var(--color-accent); }
 .route-point { width: 14px; height: 14px; border-radius: 50%; border: 3px solid #fff; background: var(--color-accent); box-shadow: 0 0 0 2px rgba(255, 112, 69, .45); }
 .route-point.is-start { background: #55bd93; }
 .route-point.is-end { background: #1c2424; }
-.vehicle-marker { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; border: 2px solid #fff; background: var(--color-accent); color: #181512; box-shadow: 0 0 0 4px rgba(255, 112, 69, .23), 0 8px 14px rgba(0,0,0,.24); font-weight: 900; font-size: 16px; }
+.leaflet-overlay-pane svg { overflow: visible; }
+.route-glow { filter: blur(7px); opacity: .42; }
+.vehicle-marker { width: var(--marker-size, 40px); height: var(--marker-size, 40px); display: grid; place-items: center; border-radius: 50%; border: 2px solid #fff; background: var(--marker-color, var(--color-accent)); color: #181512; box-shadow: 0 0 0 5px color-mix(in srgb, var(--marker-color, var(--color-accent)) 26%, transparent), 0 8px 14px rgba(0,0,0,.24); font-weight: 900; font-size: calc(var(--marker-size, 40px) * .42); transition: width 100ms ease, height 100ms ease, box-shadow 100ms ease; }
+.vehicle-marker::after { content: ""; position: absolute; inset: -9px; border: 1px solid color-mix(in srgb, var(--marker-color, var(--color-accent)) 55%, transparent); border-radius: 50%; animation: marker-pulse 1.5s ease-out infinite; }
+.vehicle-glyph { position: relative; z-index: 1; }
+@keyframes marker-pulse { 0% { transform: scale(.72); opacity: .7; } 80%, 100% { transform: scale(1.32); opacity: 0; } }
 .sign-marker { min-width: 30px; padding: 5px 8px; border: 1px solid #2f3a33; border-radius: 7px; background: #f4f0db; color: #26332e; box-shadow: 0 5px 12px rgba(0,0,0,.18); font-size: 11px; font-weight: 800; white-space: nowrap; }
+.export-status { min-height: 17px; margin: 10px 0 0; color: var(--color-green); font: 11px/1.45 var(--font-mono); }
+.export-status.is-error { color: var(--color-accent); }
 .map-frame.is-fullscreen { position: fixed; inset: 0; z-index: 100; }
 .map-frame.is-fullscreen #map { min-height: 100vh; }
 

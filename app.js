@@ -93,6 +93,7 @@
   let tileLayer;
   let routeLayer;
   let outlineLayer;
+  let glowLayer;
   let pointLayers = [];
   let signLayers = [];
   let vehicleLayer;
@@ -100,7 +101,13 @@
   let progress = 0;
   let playing = false;
   let playTimer = null;
+  let animationFrame = null;
+  let lastFrameTime = 0;
   let saveTimer = null;
+  let cameraBaseZoom = null;
+  let ffmpegPromise = null;
+  let exportBusy = false;
+  const exportTileCache = new Map();
 
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -185,7 +192,7 @@
       showToast('Leaflet could not load. The editor still works, but map controls are unavailable.', true);
       return;
     }
-    map = L.map('map', { zoomControl: false, attributionControl: true, preferCanvas: true }).setView(defaultPoints[2], 9);
+    map = L.map('map', { zoomControl: false, attributionControl: true, zoomSnap: 0.1 }).setView(defaultPoints[2], 9);
     L.control.zoom({ position: 'bottomright' }).addTo(map);
     tileLayer = L.tileLayer(TILE_STYLES.paper.url, { maxZoom: 18, attribution: TILE_STYLES.paper.attribution, crossOrigin: true }).addTo(map);
     map.on('click', onMapClick);
@@ -214,7 +221,7 @@
     updateMap();
   }
 
-  function updateMap() {
+  function updateMap(rebuild = true) {
     if (!map) return;
     const scene = currentScene();
     const points = scene.route.points || [];
@@ -224,66 +231,150 @@
       tileLayer.options.attribution = style.attribution;
     }
 
-    [routeLayer, outlineLayer, vehicleLayer, ...pointLayers, ...signLayers].forEach((layer) => {
-      if (layer && map.hasLayer(layer)) map.removeLayer(layer);
-    });
-    pointLayers = [];
-    signLayers = [];
-
-    const visible = getVisibleRoute(points, progress);
-    if (visible.length > 1) {
-      if (scene.route.outline) {
-        outlineLayer = L.polyline(visible, { color: '#ffffff', weight: scene.route.lineWidth + 4, opacity: .85, lineCap: 'round', lineJoin: 'round', dashArray: scene.route.line === 'dashed' ? '12 10' : scene.route.line === 'dotted' ? '2 10' : undefined }).addTo(map);
+    if (rebuild || !routeLayer && !vehicleLayer && !pointLayers.length) {
+      clearMapLayers();
+      const dashArray = scene.route.line === 'dashed' ? '12 10' : scene.route.line === 'dotted' ? '2 10' : undefined;
+      if (points.length > 1 && scene.route.line !== 'none') {
+        if (scene.route.glow) {
+          glowLayer = L.polyline([], { color: scene.route.lineColor, weight: scene.route.lineWidth + 18, opacity: .3, lineCap: 'round', lineJoin: 'round', className: 'route-glow', interactive: false }).addTo(map);
+        }
+        if (scene.route.outline) {
+          outlineLayer = L.polyline([], { color: '#ffffff', weight: scene.route.lineWidth + 4, opacity: .85, lineCap: 'round', lineJoin: 'round', dashArray, className: 'route-outline', interactive: false }).addTo(map);
+        }
+        routeLayer = L.polyline([], { color: scene.route.lineColor, weight: scene.route.lineWidth, opacity: 1, lineCap: 'round', lineJoin: 'round', dashArray, className: 'route-progress', interactive: false }).addTo(map);
       }
-      routeLayer = L.polyline(visible, { color: scene.route.lineColor, weight: scene.route.lineWidth, opacity: 1, lineCap: 'round', lineJoin: 'round', dashArray: scene.route.line === 'dashed' ? '12 10' : scene.route.line === 'dotted' ? '2 10' : undefined }).addTo(map);
+
+      pointLayers = points.map((point, index) => {
+        const className = `route-point ${index === 0 ? 'is-start' : ''} ${index === points.length - 1 ? 'is-end' : ''}`;
+        return L.marker(point, { icon: L.divIcon({ className: '', html: `<span class="${className}"></span>`, iconSize: [14, 14], iconAnchor: [7, 7] }), opacity: 0, interactive: false }).addTo(map);
+      });
+
+      signLayers = scene.signs.map((sign) => {
+        const point = points[Number(sign.pointIndex)];
+        if (!point) return null;
+        return L.marker(point, { icon: L.divIcon({ className: '', html: `<span class="sign-marker">${escapeHtml(sign.label || 'Waypoint')}</span>`, iconSize: [120, 32], iconAnchor: [12, 31] }), opacity: 0, interactive: false }).addTo(map);
+      }).filter(Boolean);
+
+      const vehiclePoint = pointAtProgress(points, animationRatio(scene, progress), true);
+      if (vehiclePoint && scene.route.symbol !== 'none') {
+        vehicleLayer = L.marker(vehiclePoint, { icon: vehicleIcon(scene), interactive: false }).addTo(map);
+      }
     }
 
+    const reveal = animationRatio(scene, progress);
+    const visible = getVisibleRoute(points, reveal, true);
+    const routeLayers = [glowLayer, outlineLayer, routeLayer];
+    routeLayers.forEach((layer) => layer?.setLatLngs(visible));
     points.forEach((point, index) => {
-      const visiblePointCount = Math.max(1, Math.floor(points.length * progress));
-      if (index >= visiblePointCount && progress < 1) return;
-      if (!scene.route.startDot && index === 0) return;
-      const className = `route-point ${index === 0 ? 'is-start' : ''} ${index === points.length - 1 ? 'is-end' : ''}`;
-      const marker = L.marker(point, { icon: L.divIcon({ className: '', html: `<span class="${className}"></span>`, iconSize: [14, 14], iconAnchor: [7, 7] }), interactive: false }).addTo(map);
-      pointLayers.push(marker);
+      const pointLayer = pointLayers[index];
+      if (!pointLayer) return;
+      const show = scene.route.startDot || index > 0 ? ratioForPoint(points, index, true) <= reveal + .002 : false;
+      pointLayer.setOpacity(show ? 1 : 0);
+    });
+    scene.signs.forEach((sign, index) => {
+      const signLayer = signLayers[index];
+      const signRatio = ratioForPoint(points, Number(sign.pointIndex), true);
+      signLayer?.setOpacity(signRatio <= reveal + .035 ? 1 : 0);
     });
 
-    scene.signs.forEach((sign) => {
-      const point = points[Number(sign.pointIndex)];
-      if (!point) return;
-      const marker = L.marker(point, { icon: L.divIcon({ className: '', html: `<span class="sign-marker">${escapeHtml(sign.label || 'Waypoint')}</span>`, iconSize: [90, 28], iconAnchor: [12, 31] }) }).addTo(map);
-      signLayers.push(marker);
-    });
-
-    const vehiclePoint = pointAtProgress(points, progress);
-    if (vehiclePoint) {
-      vehicleLayer = L.marker(vehiclePoint, { icon: L.divIcon({ className: '', html: `<span class="vehicle-marker">${vehicleGlyph(scene.route.symbol)}</span>`, iconSize: [32, 32], iconAnchor: [16, 16] }), interactive: false }).addTo(map);
-      if (scene.camera.mode === 'follow' && playing) map.panTo(vehiclePoint, { animate: false });
+    const vehiclePoint = pointAtProgress(points, reveal, true);
+    if (vehicleLayer && vehiclePoint) {
+      vehicleLayer.setLatLng(vehiclePoint);
+      if (scene.camera.mode === 'follow' && scene.map.followRoute && playing) {
+        followCamera(scene, vehiclePoint, pointAtProgress(points, Math.min(1, reveal + .1), true));
+      }
     }
     updateMapMeta();
+  }
+
+  function clearMapLayers() {
+    [routeLayer, outlineLayer, glowLayer, vehicleLayer, ...pointLayers, ...signLayers].forEach((layer) => {
+      if (layer && map?.hasLayer(layer)) map.removeLayer(layer);
+    });
+    routeLayer = null;
+    outlineLayer = null;
+    glowLayer = null;
+    vehicleLayer = null;
+    pointLayers = [];
+    signLayers = [];
+  }
+
+  function vehicleIcon(scene) {
+    const size = Math.max(26, Number(scene.route.symbolSize) || 40);
+    return L.divIcon({
+      className: '',
+      html: `<span class="vehicle-marker" style="--marker-size:${size}px;--marker-color:${scene.route.symbolColor || scene.route.lineColor}"><span class="vehicle-glyph">${vehicleGlyph(scene.route.symbol)}</span></span>`,
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2],
+    });
+  }
+
+  function followCamera(scene, vehiclePoint, lookAheadPoint) {
+    if (!vehiclePoint) return;
+    const center = map.getCenter();
+    const lead = lookAheadPoint || vehiclePoint;
+    const target = L.latLng(vehiclePoint[0] * .78 + lead[0] * .22, vehiclePoint[1] * .78 + lead[1] * .22);
+    const alpha = scene.camera.easing === 'snappy' ? .24 : scene.camera.easing === 'linear' ? .18 : .12;
+    const next = L.latLng(center.lat + (target.lat - center.lat) * alpha, center.lng + (target.lng - center.lng) * alpha);
+    const baseZoom = cameraBaseZoom ?? map.getZoom();
+    const targetZoom = Math.max(2, Math.min(18, baseZoom + Math.log2(Number(scene.camera.zoom) || 1)));
+    map.setView(next, targetZoom, { animate: false });
   }
 
   function vehicleGlyph(type) {
     return ({ car: '↗', train: '▰', plane: '✦', boat: '⌁', none: '·' }[type] || '↗');
   }
 
-  function getVisibleRoute(points, ratio) {
+  function animationRatio(scene, value) {
+    const ratio = Math.max(0, Math.min(1, Number(value) || 0));
+    if (scene.camera.easing === 'linear') return ratio;
+    if (scene.camera.easing === 'snappy') return 1 - Math.pow(1 - ratio, 3);
+    return ratio < .5 ? 4 * ratio * ratio * ratio : 1 - Math.pow(-2 * ratio + 2, 3) / 2;
+  }
+
+  function segmentDistance(a, b, mapCoordinates = false) {
+    if (mapCoordinates && window.L) return L.latLng(a).distanceTo(L.latLng(b));
+    return Math.hypot((b[0] || 0) - (a[0] || 0), (b[1] || 0) - (a[1] || 0));
+  }
+
+  function ratioForPoint(points, index, mapCoordinates = false) {
+    if (!points.length || index <= 0) return 0;
+    const target = Math.min(points.length - 1, Math.max(0, Number(index) || 0));
+    let total = 0;
+    let distance = 0;
+    for (let i = 1; i < points.length; i += 1) {
+      const segment = segmentDistance(points[i - 1], points[i], mapCoordinates);
+      total += segment;
+      if (i <= target) distance += segment;
+    }
+    return total ? distance / total : 0;
+  }
+
+  function getVisibleRoute(points, ratio, mapCoordinates = false) {
     if (!points.length) return [];
     if (ratio >= .999) return points;
     if (ratio <= 0) return [points[0]];
-    const target = (points.length - 1) * ratio;
-    const end = Math.floor(target);
-    const partial = points.slice(0, end + 1);
-    const next = points[end + 1];
+    const distances = [0];
+    for (let i = 1; i < points.length; i += 1) distances.push(distances[i - 1] + segmentDistance(points[i - 1], points[i], mapCoordinates));
+    const total = distances[distances.length - 1];
+    if (!total) return [points[0]];
+    const target = total * ratio;
+    let end = 1;
+    while (end < distances.length && distances[end] < target) end += 1;
+    const previousIndex = Math.max(0, end - 1);
+    const next = points[end];
+    const partial = points.slice(0, previousIndex + 1);
     if (next) {
-      const t = target - end;
-      const a = points[end];
+      const span = distances[end] - distances[previousIndex] || 1;
+      const t = (target - distances[previousIndex]) / span;
+      const a = points[previousIndex];
       partial.push([a[0] + ((next[0] - a[0]) * t), a[1] + ((next[1] - a[1]) * t)]);
     }
     return partial;
   }
 
-  function pointAtProgress(points, ratio) {
-    const route = getVisibleRoute(points, ratio);
+  function pointAtProgress(points, ratio, mapCoordinates = false) {
+    const route = getVisibleRoute(points, ratio, mapCoordinates);
     return route[route.length - 1];
   }
 
@@ -297,18 +388,23 @@
     const bottom = $('#map-overlay-bottom');
     bottom.textContent = scene.overlays.showTitle ? scene.overlays.title : '';
     bottom.style.display = scene.overlays.showTitle ? 'flex' : 'none';
+    $('#overlay-scene-name').style.display = 'inline-flex';
+    $('#overlay-brand').style.display = scene.overlays.showBrand ? 'inline-flex' : 'none';
+    $('#route-lane-label').textContent = scene.overlays.showSubtitle && scene.overlays.subtitle ? scene.overlays.subtitle : 'Route draws';
     $('#time-current').textContent = formatTime(progress * scene.duration);
     $('#time-total').textContent = formatTime(scene.duration);
     $('#timeline-progress').style.width = `${progress * 100}%`;
     $('#timeline-scrubber').value = Math.round(progress * 1000);
-    $('#route-lane-label').textContent = scene.overlays.showSubtitle && scene.overlays.subtitle ? scene.overlays.subtitle : 'Route draws';
     $('#speed-button').textContent = `${state.speed}×`;
   }
 
   function fitRoute() {
     const scene = currentScene();
     if (!map || !scene.route.points.length) return;
-    map.fitBounds(L.latLngBounds(scene.route.points), { padding: [70, 70], maxZoom: 11 });
+    map.fitBounds(L.latLngBounds(scene.route.points), { padding: [70, 70], maxZoom: 11, animate: false });
+    cameraBaseZoom = map.getZoom();
+    const zoomBias = Math.log2(Number(scene.camera.zoom) || 1);
+    if (zoomBias) map.setZoom(Math.max(2, Math.min(18, cameraBaseZoom + zoomBias)), { animate: false });
     scene.map.autoFit = true;
     saveState();
   }
@@ -393,7 +489,7 @@
   }
 
   function exportMarkup(scene) {
-    return `<section class="control-section"><div class="stat-grid"><div class="stat-card"><span>Scene duration</span><strong>${scene.duration.toFixed(1)}</strong> <small>s</small></div><div class="stat-card"><span>Output shape</span><strong>${state.shape}</strong></div></div><div class="button-row"><button class="button button-primary compact" data-action="export-webm">Export WebM</button><button class="button button-quiet compact" data-action="download-json">Download JSON</button></div><p class="note">WebM export uses a clean canvas renderer so it works on Cloudflare Pages without a rendering backend.</p></section><section class="control-section"><div class="section-title"><span>Project</span><strong>Local-first</strong></div><button class="button button-quiet compact" data-action="copy-project">Copy project JSON</button><p class="note">All edits are stored in this browser. Download the JSON to move the project between devices.</p></section>`;
+    return `<section class="control-section"><div class="stat-grid"><div class="stat-card"><span>Scene duration</span><strong>${scene.duration.toFixed(1)}</strong> <small>s</small></div><div class="stat-card"><span>Output shape</span><strong>${state.shape}</strong></div></div><div class="button-row"><button class="button button-primary compact" data-action="export-mp4">Export MP4</button><button class="button button-quiet compact" data-action="export-webm">Export WebM</button><button class="button button-quiet compact" data-action="download-json">Download JSON</button></div><p class="export-status" id="export-status" role="status" aria-live="polite">MP4 encoding runs locally in your browser and may take a few minutes.</p><p class="note">The preview uses a deterministic map renderer, smooth route travel and a moving camera. MP4 conversion loads FFmpeg WebAssembly only when requested.</p></section><section class="control-section"><div class="section-title"><span>Project</span><strong>Local-first</strong></div><button class="button button-quiet compact" data-action="copy-project">Copy project JSON</button><p class="note">All edits are stored in this browser. Download the JSON to move the project between devices.</p></section>`;
   }
 
   function bindSidebarEvents() {
@@ -511,21 +607,24 @@
     if (progress >= 1) progress = 0;
     playing = true;
     $('#play-icon').textContent = 'Ⅱ';
-    let last = performance.now();
-    clearInterval(playTimer);
-    playTimer = setInterval(() => {
-      const now = performance.now();
-      const delta = (now - last) / 1000;
-      last = now;
+    lastFrameTime = performance.now();
+    cancelAnimationFrame(animationFrame);
+    const tick = (now) => {
+      if (!playing) return;
+      const delta = Math.min(.08, Math.max(0, (now - lastFrameTime) / 1000));
+      lastFrameTime = now;
       progress = Math.min(1, progress + delta * state.speed / currentScene().duration);
-      updateMap();
+      updateMap(false);
       if (progress >= 1) stopPlay();
-    }, 33);
+      else animationFrame = requestAnimationFrame(tick);
+    };
+    animationFrame = requestAnimationFrame(tick);
   }
 
   function stopPlay() {
     playing = false;
-    clearInterval(playTimer);
+    cancelAnimationFrame(animationFrame);
+    animationFrame = null;
     playTimer = null;
     $('#play-icon').textContent = '▶';
     updateMapMeta();
@@ -544,7 +643,115 @@
   function slugify(value) { return String(value || 'route-atlas').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'route-atlas'; }
   function downloadBlob(blob, name) { const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 2000); }
 
-  function renderExportFrame(canvas, context, scene, ratio) {
+  function mercatorPoint(lat, lng, zoom) {
+    const size = 256 * (2 ** zoom);
+    const clampedLat = Math.max(-85.05112878, Math.min(85.05112878, Number(lat) || 0));
+    const sin = Math.sin((clampedLat * Math.PI) / 180);
+    return [
+      ((Number(lng) + 180) / 360) * size,
+      (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * size,
+    ];
+  }
+
+  function tileUrl(style, x, y, z) {
+    const subdomains = ['a', 'b', 'c'];
+    const host = subdomains[Math.abs(x + y) % subdomains.length];
+    return style.url.replace('{s}', host).replace('{z}', z).replace('{x}', x).replace('{y}', y).replace('{r}', '');
+  }
+
+  function loadExportTile(url) {
+    if (exportTileCache.has(url)) return exportTileCache.get(url);
+    const promise = new Promise((resolve) => {
+      const image = new Image();
+      image.crossOrigin = 'anonymous';
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        resolve(value);
+      };
+      const timeout = setTimeout(() => finish(null), 6000);
+      image.onload = () => finish(image);
+      image.onerror = () => finish(null);
+      image.src = url;
+    });
+    exportTileCache.set(url, promise);
+    promise.then((image) => {
+      if (image) exportTileCache.set(url, image);
+      else exportTileCache.delete(url);
+    });
+    return promise;
+  }
+
+  function exportZoom(scene, width, height) {
+    const points = scene.route.points || [];
+    if (!points.length) return 4;
+    const world = points.map(([lat, lng]) => mercatorPoint(lat, lng, 0));
+    const spanX = Math.max(.02, Math.max(...world.map(([x]) => x)) - Math.min(...world.map(([x]) => x)));
+    const spanY = Math.max(.02, Math.max(...world.map(([, y]) => y)) - Math.min(...world.map(([, y]) => y)));
+    const fit = Math.log2(Math.min((width - 180) / spanX, (height - 180) / spanY));
+    const bias = scene.camera.mode === 'follow' ? Math.log2(Number(scene.camera.zoom) || 1) : 0;
+    return Math.max(2, Math.min(12, Math.floor(fit + bias)));
+  }
+
+  async function prepareExportTiles(scene, width, height) {
+    const style = TILE_STYLES[scene.map.style] || TILE_STYLES.paper;
+    const zoom = exportZoom(scene, width, height);
+    const points = scene.route.points || [];
+    const worldSize = 256 * (2 ** zoom);
+    const routeWorld = points.map(([lat, lng]) => mercatorPoint(lat, lng, zoom));
+    const tileRadiusX = Math.ceil(width / 256 / 2) + 2;
+    const tileRadiusY = Math.ceil(height / 256 / 2) + 2;
+    if (!routeWorld.length) return { style, zoom, worldSize, routeWorld, tileRadiusX, tileRadiusY };
+    const urls = new Set();
+    const tileXs = routeWorld.map(([x]) => Math.floor(x / 256));
+    const tileYs = routeWorld.map(([, y]) => Math.floor(y / 256));
+    const minTileX = Math.min(...tileXs) - tileRadiusX;
+    const maxTileX = Math.max(...tileXs) + tileRadiusX;
+    const minTileY = Math.max(0, Math.min(...tileYs) - tileRadiusY);
+    const maxTileY = Math.min((2 ** zoom) - 1, Math.max(...tileYs) + tileRadiusY);
+    for (let y = minTileY; y <= maxTileY; y += 1) {
+      for (let rawX = minTileX; rawX <= maxTileX; rawX += 1) {
+        const x = ((rawX % (2 ** zoom)) + (2 ** zoom)) % (2 ** zoom);
+        urls.add(tileUrl(style, x, y, zoom));
+      }
+    }
+    // Do not make export depend on every tile response. A slow or rate-limited
+    // tile host must not leave the export button stuck forever. Frames render
+    // with whichever tiles have arrived; the vector route and overlays remain
+    // deterministic even when some tiles are unavailable.
+    [...urls].slice(0, 48).forEach(loadExportTile);
+    return { style, zoom, worldSize, routeWorld, tileRadiusX, tileRadiusY };
+  }
+
+  function drawExportTiles(context, tileState, center, width, height) {
+    const { style, zoom, worldSize } = tileState;
+    const scale = 1;
+    const centerX = center[0];
+    const centerY = center[1];
+    const tileX = Math.floor(centerX / 256);
+    const tileY = Math.floor(centerY / 256);
+    const radiusX = Math.ceil(width / 256 / 2) + 2;
+    const radiusY = Math.ceil(height / 256 / 2) + 2;
+    for (let offsetY = -radiusY; offsetY <= radiusY; offsetY += 1) {
+      const y = tileY + offsetY;
+      if (y < 0 || y >= 2 ** zoom) continue;
+      for (let offsetX = -radiusX; offsetX <= radiusX; offsetX += 1) {
+        const x = ((tileX + offsetX) % (2 ** zoom) + (2 ** zoom)) % (2 ** zoom);
+        const image = exportTileCache.get(tileUrl(style, x, y, zoom));
+        if (!image || image instanceof Promise || image.width === 0) continue;
+        const rawX = x * 256;
+        let dx = width / 2 + (rawX - centerX) * scale;
+        const dy = height / 2 + (y * 256 - centerY) * scale;
+        if (rawX - centerX > worldSize / 2) dx -= worldSize;
+        if (rawX - centerX < -worldSize / 2) dx += worldSize;
+        context.drawImage(image, dx, dy, 256 * scale, 256 * scale);
+      }
+    }
+  }
+
+  function renderExportFrame(canvas, context, scene, ratio, tileState = null) {
     const width = canvas.width;
     const height = canvas.height;
     context.clearRect(0, 0, width, height);
@@ -553,29 +760,45 @@
     background.addColorStop(1, scene.map.style === 'night' ? '#0e1218' : scene.map.style === 'terrain' ? '#a8bba9' : '#f1e8c5');
     context.fillStyle = background;
     context.fillRect(0, 0, width, height);
-    context.globalAlpha = scene.map.style === 'night' ? .16 : .18;
-    context.strokeStyle = scene.map.style === 'night' ? '#9eb4c9' : '#64776c';
-    context.lineWidth = 1;
-    const grid = Math.max(48, Math.round(width / 18));
-    for (let x = 0; x < width; x += grid) { context.beginPath(); context.moveTo(x, 0); context.lineTo(x, height); context.stroke(); }
-    for (let y = 0; y < height; y += grid) { context.beginPath(); context.moveTo(0, y); context.lineTo(width, y); context.stroke(); }
-    context.globalAlpha = 1;
-    const path = projectPoints(scene.route.points, width, height, 100);
-    if (path.length > 1 && scene.route.line !== 'none') {
-      context.lineCap = 'round'; context.lineJoin = 'round';
-      if (scene.route.outline) { drawCanvasPath(context, getVisibleRoute(path, ratio), '#ffffff', scene.route.lineWidth + 7, scene.route.line); }
-      drawCanvasPath(context, getVisibleRoute(path, ratio), scene.route.lineColor, scene.route.lineWidth, scene.route.line);
+    let path;
+    const eased = animationRatio(scene, ratio);
+    if (tileState) {
+      const currentPoint = pointAtProgress(tileState.routeWorld, eased);
+      const routeCenter = tileState.routeWorld[Math.floor(tileState.routeWorld.length / 2)] || [tileState.worldSize / 2, tileState.worldSize / 2];
+      const cameraCenter = scene.camera.mode === 'follow' && currentPoint ? currentPoint : routeCenter;
+      drawExportTiles(context, tileState, cameraCenter, width, height);
+      const scale = 1;
+      const routePath = tileState.routeWorld;
+      path = routePath.map(([x, y]) => [width / 2 + (x - cameraCenter[0]) * scale, height / 2 + (y - cameraCenter[1]) * scale]);
+    } else {
+      path = projectPoints(scene.route.points, width, height, Math.max(80, Math.round(Math.min(width, height) * .09)));
     }
-    const visibleCount = Math.max(1, Math.floor(path.length * ratio));
-    path.forEach((point, index) => { if (index <= visibleCount) drawCanvasDot(context, point, index === 0 ? '#4fc59b' : index === path.length - 1 ? '#192329' : scene.route.lineColor, index === 0 || index === path.length - 1 ? 8 : 5); });
-    const vehicle = pointAtProgress(path, ratio);
-    if (vehicle && scene.route.symbol !== 'none') { drawCanvasVehicle(context, vehicle, scene.route.symbol, scene.route.symbolColor || scene.route.lineColor); }
-    scene.signs.forEach((sign) => { const point = path[Number(sign.pointIndex)]; if (point) drawCanvasSign(context, point, sign.label); });
-    context.fillStyle = 'rgba(249, 245, 229, .84)'; context.fillRect(42, 42, Math.min(400, width * .45), scene.overlays.showSubtitle ? 115 : 78);
-    context.fillStyle = '#27342f'; context.font = `700 ${Math.max(24, Math.round(width / 44))}px Inter, sans-serif`;
-    if (scene.overlays.showTitle) context.fillText(scene.overlays.title || scene.name, 64, 82);
-    if (scene.overlays.showSubtitle && scene.overlays.subtitle) { context.fillStyle = '#53615b'; context.font = `500 ${Math.max(15, Math.round(width / 72))}px Inter, sans-serif`; context.fillText(scene.overlays.subtitle, 64, 115); }
-    context.fillStyle = '#27342f'; context.font = `700 ${Math.max(13, Math.round(width / 90))}px Inter, sans-serif`; context.fillText('ROUTE ATLAS', width - 180, height - 46);
+    const visible = getVisibleRoute(path, eased);
+    if (visible.length > 1 && scene.route.line !== 'none') {
+      context.lineCap = 'round'; context.lineJoin = 'round';
+      if (scene.route.glow) {
+        drawCanvasPath(context, visible, scene.route.lineColor, scene.route.lineWidth + 28, scene.route.line, .08, true);
+        drawCanvasPath(context, visible, scene.route.lineColor, scene.route.lineWidth + 12, scene.route.line, .18, true);
+      }
+      if (scene.route.outline) { drawCanvasPath(context, visible, '#ffffff', scene.route.lineWidth + 7, scene.route.line); }
+      drawCanvasPath(context, visible, scene.route.lineColor, scene.route.lineWidth, scene.route.line);
+    }
+    const visibleRatio = eased;
+    path.forEach((point, index) => { if (ratioForPoint(path, index) <= visibleRatio + .002) drawCanvasDot(context, point, index === 0 ? '#4fc59b' : index === path.length - 1 ? '#192329' : scene.route.lineColor, index === 0 || index === path.length - 1 ? 8 : 5); });
+    const vehicle = pointAtProgress(path, eased);
+    if (vehicle && scene.route.symbol !== 'none') { drawCanvasVehicle(context, vehicle, scene.route.symbol, scene.route.symbolColor || scene.route.lineColor, scene.route.symbolSize); }
+    scene.signs.forEach((sign) => { const point = path[Number(sign.pointIndex)]; if (point && ratioForPoint(path, Number(sign.pointIndex)) <= visibleRatio + .035) drawCanvasSign(context, point, sign.label); });
+    if (scene.overlays.showTitle || (scene.overlays.showSubtitle && scene.overlays.subtitle)) {
+      const cardWidth = Math.min(560, width * .48);
+      const cardHeight = scene.overlays.showSubtitle && scene.overlays.subtitle ? 128 : 84;
+      context.fillStyle = 'rgba(249, 245, 229, .9)'; context.fillRect(42, 42, cardWidth, cardHeight);
+      context.fillStyle = '#27342f'; context.font = `700 ${Math.max(24, Math.round(width / 44))}px Inter, sans-serif`;
+      if (scene.overlays.showTitle) context.fillText(scene.overlays.title || scene.name, 64, 82);
+      if (scene.overlays.showSubtitle && scene.overlays.subtitle) { context.fillStyle = '#53615b'; context.font = `500 ${Math.max(15, Math.round(width / 72))}px Inter, sans-serif`; context.fillText(scene.overlays.subtitle, 64, 115); }
+    }
+    if (scene.overlays.showBrand) {
+      context.fillStyle = '#27342f'; context.font = `700 ${Math.max(13, Math.round(width / 90))}px Inter, sans-serif`; context.fillText('ROUTE ATLAS', width - 180, height - 46);
+    }
   }
 
   function projectPoints(points, width, height, padding) {
@@ -588,35 +811,122 @@
     return points.map(([lat, lng]) => [xOffset + (lng - minLng) * scale, height - (yOffset + (lat - minLat) * scale)]);
   }
 
-  function drawCanvasPath(context, points, color, width, lineType) {
+  function drawCanvasPath(context, points, color, width, lineType, opacity = 1, blur = false) {
     if (points.length < 2) return;
-    context.save(); context.strokeStyle = color; context.lineWidth = width;
+    context.save(); context.globalAlpha = opacity; context.strokeStyle = color; context.lineWidth = width;
+    if (blur) context.filter = `blur(${Math.max(4, Math.round(width / 4))}px)`;
     context.setLineDash(lineType === 'dashed' ? [22, 16] : lineType === 'dotted' ? [2, 14] : []);
     context.beginPath(); context.moveTo(points[0][0], points[0][1]); points.slice(1).forEach((point) => context.lineTo(point[0], point[1])); context.stroke(); context.restore();
   }
   function drawCanvasDot(context, point, color, radius) { context.beginPath(); context.fillStyle = color; context.arc(point[0], point[1], radius, 0, Math.PI * 2); context.fill(); context.strokeStyle = '#fff'; context.lineWidth = 3; context.stroke(); }
-  function drawCanvasVehicle(context, point, symbol, color) { context.save(); context.beginPath(); context.fillStyle = color; context.arc(point[0], point[1], 20, 0, Math.PI * 2); context.fill(); context.strokeStyle = '#fff'; context.lineWidth = 4; context.stroke(); context.fillStyle = '#1c1814'; context.textAlign = 'center'; context.textBaseline = 'middle'; context.font = '900 20px sans-serif'; context.fillText(vehicleGlyph(symbol), point[0], point[1] + 1); context.restore(); }
+  function drawCanvasVehicle(context, point, symbol, color, symbolSize = 40) { const radius = Math.max(13, Number(symbolSize) / 2); context.save(); context.shadowColor = color; context.shadowBlur = radius * .75; context.beginPath(); context.fillStyle = color; context.arc(point[0], point[1], radius, 0, Math.PI * 2); context.fill(); context.shadowBlur = 0; context.strokeStyle = '#fff'; context.lineWidth = Math.max(3, radius / 5); context.stroke(); context.fillStyle = '#1c1814'; context.textAlign = 'center'; context.textBaseline = 'middle'; context.font = `900 ${Math.max(14, Math.round(radius))}px sans-serif`; context.fillText(vehicleGlyph(symbol), point[0], point[1] + 1); context.restore(); }
   function drawCanvasSign(context, point, label) { context.save(); context.font = '700 16px Inter, sans-serif'; const width = context.measureText(label).width + 22; context.fillStyle = '#f4f0db'; context.strokeStyle = '#27342f'; context.lineWidth = 2; context.beginPath(); context.roundRect(point[0] + 10, point[1] - 43, width, 30, 7); context.fill(); context.stroke(); context.fillStyle = '#27342f'; context.fillText(label, point[0] + 21, point[1] - 22); context.restore(); }
 
-  async function exportWebm() {
-    const scene = currentScene();
+  function setExportStatus(message, error = false) {
+    const status = $('#export-status');
+    if (status) {
+      status.textContent = message;
+      status.classList.toggle('is-error', error);
+    }
+  }
+
+  async function renderWebmBlob(scene, onProgress = () => {}) {
     const [width, height] = SHAPE_SIZES[state.shape];
     const scale = Math.min(1, 1280 / width, 720 / height);
     const canvas = document.createElement('canvas'); canvas.width = Math.round(width * scale); canvas.height = Math.round(height * scale);
     const context = canvas.getContext('2d');
-    if (!canvas.captureStream || !window.MediaRecorder) { showToast('WebM recording is not supported in this browser.', true); return; }
-    const stream = canvas.captureStream(30); const chunks = []; const recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9' });
+    if (!canvas.captureStream || !window.MediaRecorder) throw new Error('WebM recording is not supported in this browser.');
+    setExportStatus('Preparing map tiles…');
+    const tileState = await prepareExportTiles(scene, canvas.width, canvas.height);
+    const stream = canvas.captureStream(30); const chunks = [];
+    const mimeType = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find((type) => MediaRecorder.isTypeSupported?.(type)) || '';
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
     recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
     const done = new Promise((resolve) => { recorder.onstop = resolve; });
     recorder.start();
     const started = performance.now();
     await new Promise((resolve) => {
-      const tick = (now) => { const ratio = Math.min(1, (now - started) / 1000 / scene.duration); renderExportFrame(canvas, context, scene, ratio); if (ratio < 1) requestAnimationFrame(tick); else resolve(); };
+      const tick = (now) => { const ratio = Math.min(1, (now - started) / 1000 / scene.duration); renderExportFrame(canvas, context, scene, ratio, tileState); onProgress(ratio); if (ratio < 1) requestAnimationFrame(tick); else resolve(); };
       requestAnimationFrame(tick);
     });
     recorder.stop(); await done;
-    downloadBlob(new Blob(chunks, { type: 'video/webm' }), `${slugify(scene.name)}.webm`);
-    showToast('WebM preview exported');
+    return new Blob(chunks, { type: 'video/webm' });
+  }
+
+  async function exportWebm() {
+    if (exportBusy) return;
+    exportBusy = true;
+    const scene = currentScene();
+    try {
+      setExportStatus('Rendering WebM locally…');
+      const blob = await renderWebmBlob(scene, (ratio) => setExportStatus(`Rendering WebM locally… ${Math.round(ratio * 100)}%`));
+      downloadBlob(blob, `${slugify(scene.name)}.webm`);
+      setExportStatus('WebM exported.');
+      showToast('WebM preview exported');
+    } catch (error) {
+      setExportStatus(error.message || 'WebM export failed.', true);
+      showToast(error.message || 'WebM export failed.', true);
+    } finally {
+      exportBusy = false;
+    }
+  }
+
+  async function getFfmpeg() {
+    if (ffmpegPromise) return ffmpegPromise;
+    ffmpegPromise = (async () => {
+      setExportStatus('Loading MP4 encoder (about 31 MB)…');
+      const [{ FFmpeg }, { fetchFile }] = await Promise.all([
+        import('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/esm/index.js'),
+        import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.2/dist/esm/index.js'),
+      ]);
+      const ffmpeg = new FFmpeg();
+      const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm';
+      await ffmpeg.load({
+        classWorkerURL: new URL('./ffmpeg-worker.js', document.baseURI).href,
+        coreURL: `${baseURL}/ffmpeg-core.js`,
+        wasmURL: `${baseURL}/ffmpeg-core.wasm`,
+      });
+      return { ffmpeg, fetchFile };
+    })();
+    try {
+      return await ffmpegPromise;
+    } catch (error) {
+      ffmpegPromise = null;
+      throw error;
+    }
+  }
+
+  async function exportMp4() {
+    if (exportBusy) return;
+    exportBusy = true;
+    const scene = currentScene();
+    try {
+      const webm = await renderWebmBlob(scene, (ratio) => setExportStatus(`Rendering animation… ${Math.round(ratio * 55)}%`));
+      const { ffmpeg, fetchFile } = await getFfmpeg();
+      setExportStatus('Encoding MP4…');
+      ffmpeg.on('progress', ({ progress }) => setExportStatus(`Encoding MP4… ${Math.min(100, Math.round(55 + progress * 45))}%`));
+      await ffmpeg.writeFile('route-atlas-input.webm', await fetchFile(webm));
+      await ffmpeg.exec([
+        '-i', 'route-atlas-input.webm',
+        '-an',
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-crf', '20',
+        '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart',
+        'route-atlas-output.mp4',
+      ]);
+      const data = await ffmpeg.readFile('route-atlas-output.mp4');
+      downloadBlob(new Blob([data.buffer], { type: 'video/mp4' }), `${slugify(scene.name)}.mp4`);
+      setExportStatus('MP4 exported.');
+      showToast('MP4 exported');
+    } catch (error) {
+      console.error('MP4 export failed', error);
+      setExportStatus(error.message || 'MP4 export failed. Try WebM in a browser without MP4 support.', true);
+      showToast(error.message || 'MP4 export failed.', true);
+    } finally {
+      exportBusy = false;
+    }
   }
 
   function showToast(message, error = false) {
@@ -650,7 +960,8 @@
       case 'set-camera-easing': scene.camera.easing = element.dataset.value; saveState(); renderSidebar(); break;
       case 'download-json': exportProject(); break;
       case 'copy-project': copyProject(); break;
-      case 'export-webm': exportWebm(); break;
+      case 'export-webm': stopPlay(); exportWebm(); break;
+      case 'export-mp4': stopPlay(); exportMp4(); break;
       case 'keyboard-help': $('#help-modal').showModal(); break;
       case 'close-help': $('#help-modal').close(); break;
       case 'reset-project': localStorage.removeItem(STORAGE_KEY); location.reload(); break;

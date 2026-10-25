@@ -717,11 +717,11 @@
         urls.add(tileUrl(style, x, y, zoom));
       }
     }
-    // Do not make export depend on every tile response. A slow or rate-limited
-    // tile host must not leave the export button stuck forever. Frames render
-    // with whichever tiles have arrived; the vector route and overlays remain
-    // deterministic even when some tiles are unavailable.
-    [...urls].slice(0, 48).forEach(loadExportTile);
+    // The canvas renderer is independent from Leaflet's DOM layers. It must
+    // wait for the tile images before recording starts; otherwise every frame
+    // can contain only the fallback gradient while the vector route still
+    // renders on top of it.
+    await Promise.all([...urls].map(loadExportTile));
     return { style, zoom, worldSize, routeWorld, tileRadiusX, tileRadiusY };
   }
 

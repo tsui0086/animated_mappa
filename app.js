@@ -419,7 +419,9 @@
   }
 
   function renderStepNav() {
-    $$('#step-nav .step-button').forEach((button) => button.classList.toggle('is-active', button.dataset.step === state.activeStep));
+    const activeButton = $$('#step-nav .stage-step-button').find((button) => button.dataset.step === state.activeStep);
+    $$('#step-nav .stage-step-button').forEach((button) => button.classList.toggle('is-active', button === activeButton));
+    activeButton?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
 
   function renderSidebar() {

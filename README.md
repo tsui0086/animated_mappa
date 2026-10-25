@@ -16,6 +16,7 @@
 - 导出：项目 JSON、本地剪贴板 JSON、浏览器 WebM 预览导出、浏览器本地 MP4 转码；
 - 访问保护：Cloudflare Pages Functions 登录页、HTTP-only 会话 Cookie、全站未登录重定向；
 - 响应式布局：桌面、平板和移动端；
+- 手机适配：移动端优先显示地图预览，编辑面板下移；顶部步骤导航和地图工具支持触摸横向滚动，导出按钮和表单控件适配窄屏；
 - Cloudflare Pages / Workers 配置文件。
 
 ## 本地预览

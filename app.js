@@ -956,7 +956,7 @@
     try {
       await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
     } finally {
-      location.replace('/login.html');
+      location.replace('/login');
     }
   }
 

@@ -1,0 +1,7 @@
+name = "route-atlas-worker"
+main = "worker.js"
+compatibility_date = "2026-10-25"
+
+[assets]
+directory = "."
+not_found_handling = "single-page-application"

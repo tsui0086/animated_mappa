@@ -1,0 +1,3 @@
+name = "route-atlas-pages"
+compatibility_date = "2026-10-25"
+pages_build_output_dir = "."

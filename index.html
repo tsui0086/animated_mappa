@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#101317" />
+    <meta name="description" content="Route Atlas — animate a trip into a map film." />
+    <title>Route Atlas · Animated map studio</title>
+    <link rel="preconnect" href="https://unpkg.com" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-lockup" aria-label="Route Atlas">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="brand-name">Route Atlas</span>
+          <span class="brand-context">Animated map studio</span>
+        </div>
+
+        <div class="project-control">
+          <a class="back-link" href="#" data-action="back-projects">← Projects</a>
+          <label class="sr-only" for="project-name">Project name</label>
+          <input id="project-name" class="project-name" value="Coastal loop" maxlength="60" autocomplete="off" />
+          <span class="save-state" id="save-state">Saved locally</span>
+        </div>
+
+        <div class="top-actions">
+          <button class="icon-button" data-action="keyboard-help" aria-label="Keyboard shortcuts" title="Keyboard shortcuts">⌘/</button>
+          <button class="button button-quiet" data-action="reset-project">Reset demo</button>
+          <button class="button button-primary" data-action="download-json">Save project</button>
+        </div>
+      </header>
+
+      <div class="scene-strip">
+        <div class="strip-label">Scenes</div>
+        <div class="scene-tabs" id="scene-tabs" role="tablist" aria-label="Scenes"></div>
+        <button class="button button-quiet compact" data-action="add-scene">+ New scene</button>
+      </div>
+
+      <main class="workspace">
+        <aside class="left-rail">
+          <nav class="step-nav" aria-label="Editing steps" id="step-nav">
+            <button class="step-button is-active" data-step="route"><b>1</b><span>Route</span></button>
+            <button class="step-button" data-step="map"><b>2</b><span>Map</span></button>
+            <button class="step-button" data-step="signs"><b>3</b><span>Signs</span></button>
+            <button class="step-button" data-step="overlays"><b>4</b><span>Overlays</span></button>
+            <button class="step-button" data-step="camera"><b>5</b><span>Camera</span></button>
+            <button class="step-button" data-step="export"><b>6</b><span>Preview &amp; export</span></button>
+          </nav>
+
+          <div class="rail-settings">
+            <label class="field-label" for="video-shape">Video shape</label>
+            <select id="video-shape" class="select-control">
+              <option value="16:9">16:9 Landscape</option>
+              <option value="9:16">9:16 Vertical</option>
+              <option value="1:1">1:1 Square</option>
+              <option value="4:5">4:5 Portrait</option>
+              <option value="4:3">4:3 Classic</option>
+            </select>
+          </div>
+
+          <div class="sidebar-panel" id="sidebar-panel"></div>
+        </aside>
+
+        <section class="stage-column" aria-label="Map stage">
+          <div class="stage-toolbar">
+            <div class="stage-meta"><span id="stage-shape">16:9 · 1920 × 1080</span><span class="dot-separator">•</span><span id="stage-scene">Scene 1</span></div>
+            <div class="stage-actions">
+              <button class="button button-quiet compact" data-action="fit-route">Fit route</button>
+              <button class="button button-quiet compact" data-action="toggle-fullscreen">Fullscreen</button>
+            </div>
+          </div>
+
+          <div class="map-frame" id="map-frame">
+            <div id="map" aria-label="Interactive animated route map"></div>
+            <div class="map-overlay map-overlay-top" id="map-overlay-top">
+              <span class="live-pill"><i></i> Live preview</span>
+              <span class="overlay-scene-name" id="overlay-scene-name">Coastal loop</span>
+            </div>
+            <div class="map-overlay map-overlay-bottom" id="map-overlay-bottom"></div>
+            <div class="map-tools" aria-label="Map tools">
+              <button class="tool-button is-active" data-map-mode="draw" title="Draw route">Draw</button>
+              <button class="tool-button" data-map-mode="move" title="Move map">Move</button>
+              <button class="tool-button" data-map-mode="select" title="Select area">Select</button>
+              <button class="tool-button" data-action="show-route" title="Show full route">Show route</button>
+              <button class="tool-button" data-action="undo-point" title="Undo last point">Undo</button>
+            </div>
+            <div class="map-hint" id="map-hint">Click the map to draw a route · Shift-click to add a waypoint</div>
+          </div>
+
+          <div class="timeline-panel">
+            <div class="timeline-controls">
+              <button class="play-button" data-action="toggle-play" aria-label="Play preview"><span id="play-icon">▶</span></button>
+              <div class="time-readout"><strong id="time-current">00:00.0</strong><span>/</span><span id="time-total">00:12.0</span></div>
+              <div class="timeline-track-wrap">
+                <div class="timeline-track" id="timeline-track">
+                  <div class="timeline-progress" id="timeline-progress"></div>
+                  <input class="timeline-scrubber" id="timeline-scrubber" type="range" min="0" max="1000" value="0" step="1" aria-label="Preview timeline" />
+                  <div class="timeline-labels"><span>0s</span><span>4s</span><span>8s</span><span>12s</span></div>
+                </div>
+              </div>
+              <button class="speed-button" data-action="toggle-speed" id="speed-button">1×</button>
+            </div>
+            <div class="timeline-lanes">
+              <div class="lane-label">Camera</div><div class="lane lane-camera"><span>Follow route</span></div>
+              <div class="lane-label">Route</div><div class="lane lane-route"><span id="route-lane-label">Route draws</span></div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast-region" id="toast-region" aria-live="polite"></div>
+    <dialog class="modal" id="help-modal">
+      <div class="modal-header"><div><span class="eyebrow">Quick reference</span><h2>Keyboard shortcuts</h2></div><button class="icon-button" data-action="close-help" aria-label="Close">×</button></div>
+      <div class="shortcut-list"><div><kbd>Space</kbd><span>Play / pause preview</span></div><div><kbd>1–6</kbd><span>Switch editing step</span></div><div><kbd>D</kbd><span>Draw route mode</span></div><div><kbd>F</kbd><span>Fit route to map</span></div><div><kbd>⌘ / Ctrl + S</kbd><span>Save project JSON</span></div><div><kbd>Esc</kbd><span>Close panels</span></div></div>
+    </dialog>
+
+    <input id="gpx-input" type="file" accept=".gpx,application/gpx+xml,text/xml" hidden />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="./app.js" defer></script>
+  </body>
+</html>

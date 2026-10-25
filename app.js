@@ -839,8 +839,7 @@
     setExportStatus('Preparing map tiles…');
     const tileState = await prepareExportTiles(scene, canvas.width, canvas.height);
     const stream = canvas.captureStream(30); const chunks = [];
-    const mimeType = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find((type) => MediaRecorder.isTypeSupported?.(type)) || '';
-    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    const recorder = createWebmRecorder(stream);
     recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
     const done = new Promise((resolve) => { recorder.onstop = resolve; });
     recorder.start();
@@ -851,6 +850,26 @@
     });
     recorder.stop(); await done;
     return new Blob(chunks, { type: 'video/webm' });
+  }
+
+  function createWebmRecorder(stream) {
+    const candidates = ['video/webm;codecs=vp8', 'video/webm', 'video/webm;codecs=vp9'];
+    const supported = typeof MediaRecorder.isTypeSupported === 'function'
+      ? candidates.filter((type) => MediaRecorder.isTypeSupported(type))
+      : candidates;
+    let lastError;
+    for (const mimeType of supported) {
+      try {
+        return new MediaRecorder(stream, { mimeType });
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    try {
+      return new MediaRecorder(stream);
+    } catch (error) {
+      throw lastError || error;
+    }
   }
 
   async function exportWebm() {
@@ -910,8 +929,8 @@
         '-i', 'route-atlas-input.webm',
         '-an',
         '-c:v', 'libx264',
-        '-preset', 'veryfast',
-        '-crf', '20',
+        '-preset', 'ultrafast',
+        '-crf', '23',
         '-pix_fmt', 'yuv420p',
         '-movflags', '+faststart',
         'route-atlas-output.mp4',
@@ -931,6 +950,14 @@
 
   function showToast(message, error = false) {
     const region = $('#toast-region'); const toast = document.createElement('div'); toast.className = `toast ${error ? 'is-error' : ''}`; toast.textContent = message; region.appendChild(toast); setTimeout(() => toast.remove(), 3200);
+  }
+
+  async function logout() {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+    } finally {
+      location.replace('/login.html');
+    }
   }
 
   function renderAll() {
@@ -960,10 +987,11 @@
       case 'set-camera-easing': scene.camera.easing = element.dataset.value; saveState(); renderSidebar(); break;
       case 'download-json': exportProject(); break;
       case 'copy-project': copyProject(); break;
-      case 'export-webm': stopPlay(); exportWebm(); break;
-      case 'export-mp4': stopPlay(); exportMp4(); break;
+      case 'export-webm': stopPlay(); void exportWebm(); break;
+      case 'export-mp4': stopPlay(); void exportMp4(); break;
       case 'keyboard-help': $('#help-modal').showModal(); break;
       case 'close-help': $('#help-modal').close(); break;
+      case 'logout': void logout(); break;
       case 'reset-project': localStorage.removeItem(STORAGE_KEY); location.reload(); break;
       case 'toggle-fullscreen': $('#map-frame').classList.toggle('is-fullscreen'); setTimeout(() => map?.invalidateSize(), 150); break;
       case 'back-projects': element.href = '#projects'; showToast('This static build keeps projects in the current browser.'); break;

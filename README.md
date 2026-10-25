@@ -14,6 +14,7 @@
 - 摄像机：跟随/固定、跟随平移、缩放偏置、缓动选择；
 - 时间线：播放、暂停、拖动、速度切换；
 - 导出：项目 JSON、本地剪贴板 JSON、浏览器 WebM 预览导出、浏览器本地 MP4 转码；
+- 访问保护：Cloudflare Pages Functions 登录页、HTTP-only 会话 Cookie、全站未登录重定向；
 - 响应式布局：桌面、平板和移动端；
 - Cloudflare Pages / Workers 配置文件。
 
@@ -39,7 +40,16 @@ python3 -m http.server 4173
 - Build command 可以留空，或者使用 `exit 0`；
 - 不设置自定义 Deploy command。
 
-当前项目没有构建步骤。Git 集成部署不需要 `CLOUDFLARE_API_TOKEN`、D1、R2 或 KV。
+当前项目没有构建步骤。Git 集成部署不需要 `CLOUDFLARE_API_TOKEN`、D1、R2 或 KV；访问保护只需要 Pages Secrets。
+
+在 Cloudflare Pages 项目的 **Settings → Variables and Secrets** 中配置生产环境 Secret：
+
+```text
+ROUTE_ATLAS_PASSWORD=你的工作区密码
+ROUTE_ATLAS_SESSION_SECRET=一段随机的长字符串
+```
+
+不要把这两个值写入 GitHub。未配置 Secret 时，Pages Functions 会拒绝访问主应用，而不会退化成无密码模式。
 
 ### Wrangler Direct Upload（可选）
 
@@ -69,7 +79,8 @@ Worker 仅负责把静态资源交给 Cloudflare Assets；应用本身不需要 
 - 外部地图瓦片属于第三方服务，当前版本未内置离线底图。
 - MP4 导出通过浏览器内的 FFmpeg WebAssembly 完成，首次使用会下载约 31 MB 的编码器；编码速度取决于设备性能，导出期间请保持页面打开。
 - 导出画面会尝试预加载路线范围内的地图瓦片；如果瓦片服务响应慢，仍会使用已加载的瓦片和矢量路线继续生成视频。
+- 登录保护由 Pages Functions 执行，不把工作区密码放进前端 JavaScript；登录成功后使用 `HttpOnly`、`Secure`、`SameSite=Lax` Cookie 保存七天会话。
 
 ## 参考与设计取舍
 
-参考网站的工作流包含 Route、Map、Signs、Overlays、Camera、Preview & export 六个编辑步骤。本项目保留这一信息架构，并将项目数据改为本地优先，避免为 Cloudflare 部署额外维护数据库和上传 API。
+参考网站的工作流包含 Route、Map、Signs、Overlays、Camera、Preview & export 六个编辑步骤。本项目保留这一信息架构，并将项目数据改为本地优先，避免为 Cloudflare 部署额外维护数据库和上传 API。登录会话采用签名 Cookie，因此当前仍不需要 D1、R2 或 KV。
